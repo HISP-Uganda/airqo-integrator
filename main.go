@@ -81,9 +81,10 @@ func main() {
 			LoadLocations() // Load organisation units - before facility in base DHIS2 instance
 			// SyncLocationsToDHIS2Instances()
 		}
+		_ = models.LoadSites()
+		_ = models.LoadGrids()
 
 	}()
-	_ = models.LoadGrids()
 
 	jobs := make(chan int)
 	var wg sync.WaitGroup

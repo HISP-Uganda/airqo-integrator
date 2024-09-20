@@ -4,7 +4,9 @@ import (
 	"airqo-integrator/clients"
 	"airqo-integrator/config"
 	"airqo-integrator/db"
+	"database/sql"
 	"encoding/json"
+	"fmt"
 	"github.com/buger/jsonparser"
 	log "github.com/sirupsen/logrus"
 	"time"
@@ -27,30 +29,33 @@ type Site struct {
 	CurrentSubcounty int64     `json:"current_subcounty,omitempty" db:"current_subcounty"`
 	Created          time.Time `json:"created,omitempty" db:"created"`
 	Updated          time.Time `json:"updated,omitempty" db:"updated"`
-	Devices          []Device  `json:"devices,omitempty" db:"devices"`
+	Devices          []Device  `json:"devices,omitempty"`
+	Grids            []Grid    `json:"grids,omitempty"`
 }
 
 const insertSiteSQL = `
 INSERT INTO sites(uid, name, search_name, location_name, country, city, district, county, 
 sub_county, region, longitude, latitude, current_subcounty, created, updated)
 VALUES(:uid, :name, :search_name, :location_name, :country, :city, :district, :county, 
-:sub_county, :region, :longitude, :latitude, :current_subcounty, NOW(), NOW()) RETURNING id
+:sub_county, :region, :longitude, :latitude, :current_subcounty, NOW(), NOW()) 
+ ON CONFLICT (uid) DO NOTHING RETURNING id
 `
 
 // Insert is a method that inserts a new site
 func (s *Site) Insert() (int64, error) {
 	dbConn := db.GetDB()
-	res, err := dbConn.NamedExec(insertSiteSQL, s)
+	rows, err := dbConn.NamedQuery(insertSiteSQL, s)
 	if err != nil {
 		log.WithError(err).Error("Failed to insert site")
 		return 0, err
 	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		log.WithError(err).Error("Failed to get last insert ID")
-		return 0, err
+	for rows.Next() {
+		var gridId int64
+		_ = rows.Scan(&gridId)
+		s.ID = gridId
 	}
-	return id, nil
+	_ = rows.Close()
+	return s.ID, nil
 }
 
 // Update is a method that updates an existing site
@@ -68,6 +73,16 @@ func (s *Site) Update() error {
 	return nil
 }
 
+// InsertOrUpdate is a method that updates an existing site or creates if missing
+func (s *Site) InsertOrUpdate() error {
+	if s.ID == 0 {
+		_, err := s.Insert()
+		return err
+	}
+	s.ID = s.DbID()
+	return s.Update()
+}
+
 // Delete is a method that deletes a site
 func (s *Site) Delete() error {
 	dbConn := db.GetDB()
@@ -77,6 +92,17 @@ func (s *Site) Delete() error {
 		return err
 	}
 	return nil
+}
+
+// DbID retrieves the ID from the database for a site given its UID
+func (s *Site) DbID() int64 {
+	dbConn := db.GetDB()
+	var id sql.NullInt64
+	err := dbConn.Get(&id, `SELECT id FROM sites WHERE uid = $1`, s.UID)
+	if err != nil {
+		log.WithError(err).Infof("Failed to get ID of site with UID: %v", s.UID)
+	}
+	return id.Int64
 }
 
 // GetSitesByGridUID returns a list of sites in a given grid. use a Join on grid_sites
@@ -89,7 +115,7 @@ func GetSitesByGridUID(gridUID string) ([]Site, error) {
     FROM sites s JOIN grid_sites gs ON s.id = gs.site_id 
     WHERE gs.grid_id = (SELECT id FROM grids WHERE uid = $1)`, gridUID)
 	if err != nil {
-		log.WithError(err).Error("Failed to get sites by grid UID")
+		// log.WithError(err).Error("Failed to get sites by grid UID")
 		return nil, err
 	}
 	return sites, nil
@@ -147,6 +173,103 @@ func (s *Site) GetGrids() ([]Grid, error) {
 		return nil, err
 	}
 	return grids, nil
+}
+
+// GetDhis2District returns the organisationunit table matching site's district after appending ' District' to site's district field
+// and ensuring match is made for hierarchylevel = 3 in organisationunit table. Also the site's country should be = Uganda
+
+func (s *Site) GetDhis2District() (int64, error) {
+	dbConn := db.GetDB()
+	if s.Country == "Uganda" {
+		var district int64
+		err := dbConn.Get(&district, `
+   	SELECT id FROM organisationunit WHERE name = $1 AND hierarchylevel = 3`, s.District+" District")
+		if err != nil {
+			return 0, err
+		}
+		return district, nil
+	}
+	return 0, fmt.Errorf("Country %s not supported or site's district not found", s.Country)
+
+}
+
+// UpdateDhis2District updates the site's dhis2_district field given an int64 representing district
+func (s *Site) UpdateDhis2District(districtID int64) error {
+	dbConn := db.GetDB()
+	_, err := dbConn.Exec("UPDATE sites SET dhis2_district = $1 WHERE uid = $2", districtID, s.UID)
+	if err != nil {
+		// log.WithError(err).Errorf("Failed to update dhis2_district in site: %v", s.UID)
+		return err
+	}
+	return nil
+}
+
+// UpdateCurrentSubCounty updates the site's current_subcounty field given an int64 representing subcounty
+func (s *Site) UpdateCurrentSubCounty(subcountyID int64) error {
+	dbConn := db.GetDB()
+	_, err := dbConn.Exec("UPDATE sites SET current_subcounty = $1 WHERE uid = $2", subcountyID, s.UID)
+	if err != nil {
+		// log.WithError(err).Errorf("Failed to update current_subcounty in site: %v", s.UID)
+		return err
+	}
+	return nil
+}
+
+// LoadSites ...
+func LoadSites() error {
+	log.Infof("Loading sites from API...")
+	sites, err := fetchSitesFromAPI()
+	if err != nil {
+		return err
+	}
+	for _, site := range sites {
+		// Insert or update site in the database
+		// log.Infof("Read Site: %v", site.UID)
+
+		err = site.InsertOrUpdate()
+		if err != nil {
+			continue
+			// return err
+		}
+		site.ID = site.DbID()
+		for _, device := range site.Devices {
+			device.SiteID = site.ID
+			err = device.InsertOrUpdate()
+			if err != nil {
+				continue
+				// return err
+			}
+			device.ID = device.DbID()
+			// log.Infof("Site: %v, Device: %v", site.UID, device.UID)
+
+		}
+		dhis2District, er := site.GetDhis2District()
+		if er == nil {
+			err = site.UpdateDhis2District(dhis2District)
+			if err != nil {
+				continue
+			}
+		}
+		if dhis2District > 0 {
+			// log.Infof("Site: %v and DistrictID: %v, District: %v", site.UID, dhis2District)
+			subCounties, _ := OrgUnitChildren(dhis2District)
+			// log.Infof("District: %v Suncounties: %v", dhis2District, subCounties)
+			for _, sc := range subCounties {
+				isInOu, _ := IsPointInOrganisationUnit(sc, site.Longitude, site.Latitude)
+				if isInOu {
+					log.Infof("Site: %v, Subcounty: %v, Is Inside: %v", site.UID, sc, isInOu)
+					err = site.UpdateCurrentSubCounty(sc)
+					if err != nil {
+						continue
+					}
+				}
+			}
+
+		}
+
+	}
+	log.Infof("Done loading Sites...")
+	return nil
 }
 
 func fetchSitesFromAPI() ([]Site, error) {

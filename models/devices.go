@@ -2,6 +2,7 @@ package models
 
 import (
 	"airqo-integrator/db"
+	"database/sql"
 	log "github.com/sirupsen/logrus"
 	"time"
 )
@@ -10,7 +11,7 @@ type Device struct {
 	ID               int64     `json:"id,omitempty" db:"id"`
 	UID              string    `json:"_id" db:"uid"`
 	Name             string    `json:"name,omitempty" db:"name"`
-	DeviceNumber     string    `json:"device_number,omitempty" db:"device_number"`
+	DeviceNumber     float64   `json:"device_number,omitempty" db:"device_number"`
 	LocationName     string    `json:"location_name,omitempty" db:"location_name"`
 	Country          string    `json:"country,omitempty" db:"country"`
 	City             string    `json:"city,omitempty" db:"city"`
@@ -28,7 +29,8 @@ const insertDeviceSQL = `
 INSERT INTO devices(uid, name, device_number, location_name, country, city, network, 
 	longitude, latitude, current_subcounty, site_id, created, updated)
 VALUES(:uid, :name, :device_number, :location_name, :country, :city, :network, 
-    :longitude, :latitude, :current_subcounty, :site_id, NOW(), NOW()) RETURNING  id
+    :longitude, :latitude, :current_subcounty, :site_id, NOW(), NOW()) 
+ ON CONFLICT (uid) DO NOTHING RETURNING  id
 `
 
 // Insert adds a new device
@@ -61,6 +63,26 @@ func (d *Device) Update() error {
 		return err
 	}
 	return nil
+}
+
+func (d *Device) DbID() int64 {
+	dbConn := db.GetDB()
+	var id sql.NullInt64
+	err := dbConn.Get(&id, `SELECT id FROM devices WHERE uid = $1`, d.UID)
+	if err != nil {
+		log.WithError(err).Info("Failed to get device id")
+	}
+	return id.Int64
+}
+
+// InsertOrUpdate is a method that updates an existing site or creates if missing
+func (d *Device) InsertOrUpdate() error {
+	if d.ID == 0 {
+		_, err := d.Insert()
+		return err
+	}
+	d.ID = d.DbID()
+	return d.Update()
 }
 
 // Delete removes a device from the database

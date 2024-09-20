@@ -5,7 +5,8 @@ CREATE TABLE IF NOT EXISTS grids (
     admin_level VARCHAR(36) NOT NULL,
     in_scope BOOLEAN NOT NULL DEFAULT TRUE,
     created     timestamptz DEFAULT CURRENT_TIMESTAMP,
-    updated     timestamptz DEFAULT CURRENT_TIMESTAMP
+    updated     timestamptz DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (uid)
 );
 CREATE INDEX grid_uid_idx ON grids (uid);
 CREATE INDEX grid_admin_level_idx ON grids (admin_level);
@@ -25,9 +26,11 @@ CREATE TABLE IF NOT EXISTS sites (
     region TEXT NOT NULL DEFAULT '',
     longitude DOUBLE PRECISION NOT NULL,
     latitude  DOUBLE PRECISION NOT NULL,
+    dhis2_district BIGSERIAL,
     current_subcounty BIGSERIAL,
     created TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    updated TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (uid)
 );
 
 CREATE INDEX sites_uid_idx ON sites (uid);
@@ -42,14 +45,15 @@ CREATE TABLE IF NOT EXISTS grid_sites (
     grid_id bigint REFERENCES grids (id),
     site_id bigint REFERENCES sites (id),
     created TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    updated TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (grid_id, site_id)
 );
 
 CREATE TABLE IF NOT EXISTS devices (
     id bigserial NOT NULL PRIMARY KEY,
     uid VARCHAR(25) NOT NULL,
     name TEXT NOT NULL,
-    device_number TEXT NOT NULL DEFAULT '',
+    device_number NUMERIC NOT NULL,
     location_name TEXT NOT NULL DEFAULT '',
     country TEXT NOT NULL DEFAULT '',
     city TEXT NOT NULL DEFAULT '',
@@ -59,7 +63,8 @@ CREATE TABLE IF NOT EXISTS devices (
     current_subcounty BIGSERIAL,
     site_id BIGSERIAL NOT NULL REFERENCES sites (id),
     created TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    updated TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (uid)
 );
 
 CREATE INDEX devices_uid_idx ON devices (uid);
@@ -74,5 +79,6 @@ CREATE TABLE IF NOT EXISTS grid_devices
     grid_id   bigint REFERENCES grids (id),
     device_id bigint REFERENCES devices (id),
     created   TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated   TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    updated   TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (grid_id, device_id)
 );

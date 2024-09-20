@@ -396,6 +396,45 @@ func (o *OrganisationUnit) NewOrgUnit() {
 	_ = rows.Close()
 }
 
+// OrgUnitChildren returns a slice of ids with organisationunit's children
+func OrgUnitChildren(id int64) ([]int64, error) {
+	dbConn := db.GetDB()
+	var ids []int64
+	err := dbConn.Select(&ids, `SELECT id FROM organisationunit WHERE parentid = $1`, id)
+	if err != nil {
+		log.WithError(err).Error("Failed to get children of Organisation Unit")
+		return nil, err
+	}
+	return ids, nil
+}
+
+// IsPointInOrganisationUnit a function that returns true if point in organisationunit geometry
+// the function takes the id of the organisationunit and a longitude and latitude
+func IsPointInOrganisationUnit(id int64, longitude, latitude float64) (bool, error) {
+	dbConn := db.GetDB()
+	var isPointInGeometry bool
+	err := dbConn.Get(&isPointInGeometry, `
+	 SELECT ST_Covers(geometry, ST_SetSRID(ST_MakePoint($1, $2), 4326)) 
+		FROM organisationunit WHERE id = $3`,
+		longitude, latitude, id)
+	if err != nil {
+		return false, err
+	}
+	return isPointInGeometry, nil
+}
+
+// GetOrganisationUnitById returns the organisationunit given its id
+func GetOrganisationUnitById(id int64) (*OrganisationUnit, error) {
+	dbConn := db.GetDB()
+	ou := &OrganisationUnit{}
+	err := dbConn.Get(ou, "SELECT * FROM organisationunit WHERE id = $1", id)
+	if err != nil {
+		log.WithError(err).WithField("ID", id).Error("Failed to get Organisation Unit")
+		return nil, err
+	}
+	return ou, nil
+}
+
 func CompareDefinition(newDefinition, latestDefinition dbutils.MapAnything) (bool, dbutils.MapAnything, error) {
 	dbConn := db.GetDB()
 	var matches bool

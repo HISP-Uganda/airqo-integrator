@@ -4,6 +4,7 @@ import (
 	"airqo-integrator/clients"
 	"airqo-integrator/config"
 	"airqo-integrator/db"
+	"database/sql"
 	"encoding/json"
 	"github.com/buger/jsonparser"
 	log "github.com/sirupsen/logrus"
@@ -19,12 +20,13 @@ type Grid struct {
 	Created    time.Time `json:"created,omitempty" db:"created"`
 	Updated    time.Time `json:"updated,omitempty" db:"updated"`
 	Sites      []Site    `json:"sites,omitempty"`
-	Devices    []Device  `json:"devices,omitempty"`
+	// Devices    []Device  `json:"devices,omitempty"`
 }
 
 const insertGridSQL = `
 INSERT INTO grids(uid, name, admin_level, in_scope, created, updated)
-VALUES(:uid, :name, :admin_level, TRUE, NOW(), NOW()) RETURNING  id
+VALUES(:uid, :name, :admin_level, TRUE, NOW(), NOW()) ON CONFLICT (uid) 
+ DO NOTHING  RETURNING  id;
 `
 
 func (g *Grid) Insert() (int64, error) {
@@ -53,6 +55,27 @@ func (g *Grid) Update() error {
 		return err
 	}
 	return nil
+}
+
+// DbID retrieves the ID from the database for a grid given its UID
+func (g *Grid) DbID() int64 {
+	dbConn := db.GetDB()
+	var id sql.NullInt64
+	err := dbConn.Get(&id, `SELECT id FROM grids WHERE uid = $1`, g.UID)
+	if err != nil {
+		log.WithError(err).Infof("Failed to get grid with UID: %v", g.UID)
+	}
+	return id.Int64
+}
+
+// InsertOrUpdate is a method that updates an existing grid or creates if missing
+func (g *Grid) InsertOrUpdate() error {
+	if g.ID == 0 {
+		_, err := g.Insert()
+		return err
+	}
+	g.ID = g.DbID()
+	return g.Update()
 }
 
 // Delete removes a grid from database
@@ -149,6 +172,39 @@ func (g *Grid) GetSiteUIDs() ([]string, error) {
 	return siteUIDs, nil
 }
 
+// AssociateSite given a site ID add to the grid_sites table if it doesn't already exist
+func (g *Grid) AssociateSite(siteID int64) error {
+	dbConn := db.GetDB()
+	_, err := dbConn.Exec(`
+	INSERT INTO grid_sites(grid_id, site_id) VALUES($1, $2) 
+		ON CONFLICT (grid_id, site_id) DO NOTHING`, g.ID, siteID)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// AssociateDevice given a device ID add to the grid_devices table if it doesn't already exist
+func (g *Grid) AssociateDevice(deviceID int64) error {
+	dbConn := db.GetDB()
+	_, err := dbConn.Exec(`
+    INSERT INTO grid_devices(grid_id, device_id) VALUES($1, $2) 
+        ON CONFLICT (grid_id, device_id) DO NOTHING`, g.ID, deviceID)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+//func (g *Grid) AssociateSite(siteID int64) error {
+//    dbConn := db.GetDB()
+//    _, err := dbConn.Exec(`INSERT INTO grid_sites(grid_id, site_id) VALUES($1, $2)`, g.ID, siteID)
+//    if err!= nil {
+//        return err
+//    }
+//    return nil
+//}
+
 // GetGridsInScope returns a list of grids in scope
 func GetGridsInScope() ([]Grid, error) {
 	var grids []Grid
@@ -163,31 +219,43 @@ func GetGridsInScope() ([]Grid, error) {
 
 // LoadGrids is a function that fetches grids from an external API and adds them to the database if not already present
 func LoadGrids() error {
-	log.Info("Loading grids......")
+	log.Info("Loading grids from AirQo API......")
 	grids, err := fetchGridsFromAPI()
 	if err != nil {
 		return err
 	}
 
-	// dbConn := db.GetDB()
 	for _, grid := range grids {
-		// log.Infof("Grid: %d Sites: %v", grid.ID, grid.Sites)
-		g, err := GetGridByUID(grid.UID)
-		if err == nil && g != nil {
-			// Grid already exists, update it
-			err = g.Update()
-			if err != nil {
-				return err
-			}
-		} else {
-			// Grid does not exist, insert it
-			id, err := grid.Insert()
-			if err != nil {
-				return err
-			}
-			log.Infof("Inserted grid with ID: %d", id)
+		err = grid.InsertOrUpdate()
+		if err != nil {
+			continue
+			// return err
 		}
+		grid.ID = grid.DbID()
+		for _, site := range grid.Sites {
+			existingSite, _err := GetSiteByUID(site.UID)
+			if _err != nil {
+				continue
+			}
+			err = grid.AssociateSite(existingSite.ID)
+			if err != nil {
+				continue
+			}
+			siteDevices, _ := existingSite.GetDevices()
+			for _, device := range siteDevices {
+				existingDevice, _err := GetDeviceByUID(device.UID)
+				if _err != nil {
+					continue
+				}
+				err = grid.AssociateDevice(existingDevice.ID)
+				if err != nil {
+					continue
+				}
+			}
+		}
+
 	}
+	log.Info("Done loading grids from AirQo API......")
 	return err
 }
 
