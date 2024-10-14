@@ -20,8 +20,13 @@ import (
 var AirQoIntegratorConf Config
 var ForceSync *bool
 var SkipOUSync *bool
+var PilotMode *bool
+var StartDate *string
+var EndDate *string
 var DisableHTTPServer *bool
 var SkipRequestProcessing *bool // used to ignore the attempt to send request. Don't produce or consume requests
+var SkipScheduleProcessing *bool
+var SkipFectchingByDate *bool
 var AIRQODHIS2ServersConfigMap = make(map[string]ServerConf)
 var ShowVersion *bool
 
@@ -50,10 +55,17 @@ func init() {
 	configFile := flag.String("config-file", configFilePath,
 		"The path to the configuration file of the application")
 
+	startDate := time.Now().Add(-24 * time.Hour).Format("2006-01-02")
+	endDate := time.Now().Format("2006-01-02")
 	ForceSync = flag.Bool("force-sync", false, "Whether to forcefully sync organisation unit hierarchy")
 	SkipOUSync = flag.Bool("skip-ousync", false, "Whether to skip ou and facility sync. But process requests")
+	PilotMode = flag.Bool("pilot-mode", false, "Whether we're running integrator in pilot mode")
+	StartDate = flag.String("start-date", startDate, "Date from which to start fetching data (YYYY-MM-DD)")
+	EndDate = flag.String("end-date", endDate, "Date until which to fetch data (YYYY-MM-DD)")
 	DisableHTTPServer = flag.Bool("disable-http-server", false, "Whether to disable HTTP Server")
 	SkipRequestProcessing = flag.Bool("skip-request-processing", false, "Whether to skip requests processing")
+	SkipScheduleProcessing = flag.Bool("skip-schedule-processing", false, "Whether to skip schedule processing")
+	SkipFectchingByDate = flag.Bool("skip-fetching-by-date", false, "Whether to skip fetching measurements by start and end date")
 	ShowVersion = flag.Bool("version", false, "Display version of AIRQO Integrator")
 	// FakeSyncToBaseDHIS2 = flag.Bool("fake-sync-to-base-dhis2", false, "Whether to fake sync to base DHIS2")
 
@@ -148,33 +160,39 @@ type Config struct {
 	} `yaml:"database"`
 
 	Server struct {
-		Host                    string `mapstructure:"host" env:"AIRQOINTEGRATOR_HOST" env-default:"localhost"`
-		Port                    string `mapstructure:"http_port" env:"AIRQOINTEGRATOR_SERVER_PORT" env-description:"Server port" env-default:"9090"`
-		ProxyPort               string `mapstructure:"proxy_port" env:"AIRQOINTEGRATOR_PROXY_PORT" env-description:"Server port" env-default:"9191"`
-		MaxRetries              int    `mapstructure:"max_retries" env:"AIRQOINTEGRATOR_MAX_RETRIES" env-default:"3"`
-		StartOfSubmissionPeriod string `mapstructure:"start_submission_period" env:"AIRQOINTEGRATOR_START_SUBMISSION_PERIOD" env-default:"18"`
-		EndOfSubmissionPeriod   string `mapstructure:"end_submission_period" env:"AIRQOINTEGRATOR_END_SUBMISSION_PERIOD" env-default:"24"`
-		MaxConcurrent           int    `mapstructure:"max_concurrent" env:"AIRQOINTEGRATOR_MAX_CONCURRENT" env-default:"5"`
-		SkipRequestProcessing   bool   `mapstructure:"skip_request_processing" env:"AIRQOINTEGRATOR_SKIP_REQUEST_PROCESSING" env-default:"false"`
-		ForceSync               bool   `mapstructure:"force_sync" env:"AIRQOINTEGRATOR_FORCE_SYNC" env-default:"false"` // Assume OU hierarchy already there
-		SyncOn                  bool   `mapstructure:"sync_on" env:"AIRQOINTEGRATOR_SYNC_ON" env-default:"true"`
-		FakeSyncToBaseDHIS2     bool   `mapstructure:"fake_sync_to_base_dhis2" env:"AIRQOINTEGRATOR_FAKE_SYNC_TO_BASE_DHIS2" env-default:"false"`
-		RequestProcessInterval  int    `mapstructure:"request_process_interval" env:"AIRQOINTEGRATOR_REQUEST_PROCESS_INTERVAL" env-default:"4"`
-		LogDirectory            string `mapstructure:"logdir" env:"AIRQOINTEGRATOR_LOGDIR" env-default:"/var/log/airqointegrator"`
-		MigrationsDirectory     string `mapstructure:"migrations_dir" env:"AIRQOINTEGRATOR_MIGRATTIONS_DIR" env-default:"file:///usr/share/airqointegrator/db/migrations"`
-		UseSSL                  string `mapstructure:"use_ssl" env:"AIRQOINTEGRATOR_USE_SSL" env-default:"true"`
-		SSLClientCertKeyFile    string `mapstructure:"ssl_client_certkey_file" env:"SSL_CLIENT_CERTKEY_FILE" env-default:""`
-		SSLServerCertKeyFile    string `mapstructure:"ssl_server_certkey_file" env:"SSL_SERVER_CERTKEY_FILE" env-default:""`
-		SSLTrustedCAFile        string `mapstructure:"ssl_trusted_cafile" env:"SSL_TRUSTED_CA_FILE" env-default:""`
+		Host                        string `mapstructure:"host" env:"AIRQOINTEGRATOR_HOST" env-default:"localhost"`
+		Port                        string `mapstructure:"http_port" env:"AIRQOINTEGRATOR_SERVER_PORT" env-description:"Server port" env-default:"9090"`
+		ProxyPort                   string `mapstructure:"proxy_port" env:"AIRQOINTEGRATOR_PROXY_PORT" env-description:"Server port" env-default:"9191"`
+		MaxRetries                  int    `mapstructure:"max_retries" env:"AIRQOINTEGRATOR_MAX_RETRIES" env-default:"3"`
+		StartOfSubmissionPeriod     string `mapstructure:"start_submission_period" env:"AIRQOINTEGRATOR_START_SUBMISSION_PERIOD" env-default:"18"`
+		EndOfSubmissionPeriod       string `mapstructure:"end_submission_period" env:"AIRQOINTEGRATOR_END_SUBMISSION_PERIOD" env-default:"24"`
+		MaxConcurrent               int    `mapstructure:"max_concurrent" env:"AIRQOINTEGRATOR_MAX_CONCURRENT" env-default:"5"`
+		SkipRequestProcessing       bool   `mapstructure:"skip_request_processing" env:"AIRQOINTEGRATOR_SKIP_REQUEST_PROCESSING" env-default:"false"`
+		ForceSync                   bool   `mapstructure:"force_sync" env:"AIRQOINTEGRATOR_FORCE_SYNC" env-default:"false"` // Assume OU hierarchy already there
+		SyncOn                      bool   `mapstructure:"sync_on" env:"AIRQOINTEGRATOR_SYNC_ON" env-default:"true"`
+		FakeSyncToBaseDHIS2         bool   `mapstructure:"fake_sync_to_base_dhis2" env:"AIRQOINTEGRATOR_FAKE_SYNC_TO_BASE_DHIS2" env-default:"false"`
+		RequestProcessInterval      int    `mapstructure:"request_process_interval" env:"AIRQOINTEGRATOR_REQUEST_PROCESS_INTERVAL" env-default:"4"`
+		Dhis2JobStatusCheckInterval int    `mapstructure:"dhis2_job_status_check_interval" env:"DHIS2_JOB_STATUS_CHECK_INTERVAL" env-description:"The DHIS2 job status check interval in seconds" env-default:"30"`
+		LogDirectory                string `mapstructure:"logdir" env:"AIRQOINTEGRATOR_LOGDIR" env-default:"/var/log/airqointegrator"`
+		MigrationsDirectory         string `mapstructure:"migrations_dir" env:"AIRQOINTEGRATOR_MIGRATTIONS_DIR" env-default:"file:///usr/share/airqointegrator/db/migrations"`
+		UseSSL                      string `mapstructure:"use_ssl" env:"AIRQOINTEGRATOR_USE_SSL" env-default:"true"`
+		SSLClientCertKeyFile        string `mapstructure:"ssl_client_certkey_file" env:"SSL_CLIENT_CERTKEY_FILE" env-default:""`
+		SSLServerCertKeyFile        string `mapstructure:"ssl_server_certkey_file" env:"SSL_SERVER_CERTKEY_FILE" env-default:""`
+		SSLTrustedCAFile            string `mapstructure:"ssl_trusted_cafile" env:"SSL_TRUSTED_CA_FILE" env-default:""`
+		TimeZone                    string `mapstructure:"timezone" env:"DISPATCHER2_TIMEZONE" env-default:"Africa/Kampala" env-description:"The time zone used for this dispatcher2 deployment"`
 	} `yaml:"server"`
 
 	API struct {
 		AIRQOBaseURL                   string `mapstructure:"airqo_base_url" env:"AIRQOINTEGRATOR_BASE_URL" env-description:"The AIRQO base API URL"`
 		AIRQOToken                     string `mapstructure:"airqo_token"  env:"AIRQOINTEGRATOR_TOKEN" env-description:"The AIRQO API token"`
+		AIRQOPilotDistricts            string `mapstructure:"airqo_pilot_districts" env:"AIRQOINTEGRATOR_PILOT_DISTRICTS" env-description:"The AIRQO Integration pilot districts" env-default:"Kampala District"`
+		AIRQODHIS2Country              string `mapstructure:"airqo_dhis2_country" env:"AIRQOINTEGRATOR_DHIS2_COUNTRY" env-description:"The AIRQO base DHIS2 Country"`
 		AIRQODHIS2BaseURL              string `mapstructure:"airqo_dhis2_base_url" env:"AIRQOINTEGRATOR_DHIS2_BASE_URL" env-description:"The AIRQO base DHIS2 instance base API URL"`
 		AIRQODHIS2User                 string `mapstructure:"airqo_dhis2_user"  env:"AIRQOINTEGRATOR_DHIS2_USER" env-description:"The AIRQO base DHIS2 username"`
 		AIRQODHIS2Password             string `mapstructure:"airqo_dhis2_password"  env:"AIRQOINTEGRATOR_DHIS2_PASSWORD" env-description:"The AIRQO base DHIS2  user password"`
 		AIRQODHIS2PAT                  string `mapstructure:"airqo_dhis2_pat"  env:"AIRQOINTEGRATOR_DHIS2_PAT" env-description:"The AIRQO base DHIS2  Personal Access Token"`
+		AIRQODHIS2DataSet              string `mapstructure:"airqo_dhis2_dataset"  env:"AIRQOINTEGRATOR_DHIS2_DATASET" env-description:"The AIRQO base DHIS2 DATASET"`
+		AIRQODHIS2AttributeOptionCombo string `mapstructure:"airqo_dhis2_attribute_option_combo"  env:"AIRQOINTEGRATOR_DHIS2_ATTRIBUTE_OPTION_COMBO" env-description:"The AIRQO base DHIS2 Attribute Option Combo"`
 		AIRQODHIS2AuthMethod           string `mapstructure:"airqo_dhis2_auth_method"  env:"AIRQOINTEGRATOR_DHIS2_AUTH_METHOD" env-description:"The AIRQO base DHIS2  Authentication Method"`
 		AIRQODHIS2TreeIDs              string `mapstructure:"airqo_dhis2_tree_ids"  env:"AIRQOINTEGRATOR_DHIS2_TREE_IDS" env-description:"The AIRQO base DHIS2  orgunits top level ids"`
 		AIRQODHIS2FacilityLevel        int    `mapstructure:"airqo_dhis2_facility_level"  env:"AIRQOINTEGRATOR_DHIS2_FACILITY_LEVEL" env-description:"The base DHIS2  Orgunit Level for health facilities" env-default:"5"`
