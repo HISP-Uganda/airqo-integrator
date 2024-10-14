@@ -18,6 +18,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,19 @@ type ServerStatus struct {
 	Errors     string               `json:"errors"`
 }
 
+// AddParamsToURL takes a URL and add extra parameters to it from dbutils.MapAnything
+// check whether URL doesn't contain ? at the end before adding parameters, if so simply add parameters
+func AddParamsToURL(myURL string, params dbutils.MapAnything) string {
+	if !strings.HasSuffix(myURL, "?") {
+		myURL = myURL + "?"
+	}
+	p := url.Values{}
+	for k, v := range params {
+		p.Add(k, fmt.Sprintf("%v", v))
+	}
+	return myURL + p.Encode()
+}
+
 // Scan is the db driver scanner for ServerStatus
 func (a *ServerStatus) Scan(value interface{}) error {
 	b, ok := value.([]byte)
@@ -43,8 +57,8 @@ func (a *ServerStatus) Scan(value interface{}) error {
 	return json.Unmarshal(b, &a)
 }
 
-// RequestObj is our object used by consumers
-type RequestObj struct {
+// RequestObject is our object used by consumers
+type RequestObject struct {
 	ID                 models.RequestID     `db:"id"`
 	Source             int                  `db:"source"`
 	Destination        int                  `db:"destination"`
@@ -74,13 +88,20 @@ const updateStatusSQL = `
 	UPDATE requests SET (status,  updated) = (:status, current_timestamp)
 	WHERE id = :id`
 
+const selectRequestObjectSQL = `
+SELECT id, source, destination, depends_on, cc_servers, cc_servers_status, body, 
+	response, retries, ctype, object_type, body_is_query_param, submissionid, 
+	url_suffix, suspended, status, statuscode, errors
+FROM requests WHERE id = $1;
+`
+
 // HasDependency returns true if request has a request it depends on
-func (r *RequestObj) HasDependency() bool {
+func (r *RequestObject) HasDependency() bool {
 	return r.DependsOn > 0
 }
 
 // DependencyCompleted returns true request's dependent request was completed
-func (r *RequestObj) DependencyCompleted(tx *sqlx.Tx) bool {
+func (r *RequestObject) DependencyCompleted(tx *sqlx.Tx) bool {
 	if r.HasDependency() {
 		completed := false
 		err := tx.Get(&completed, "SELECT status = 'completed' FROM requests WHERE id = $1", r.DependsOn)
@@ -93,8 +114,18 @@ func (r *RequestObj) DependencyCompleted(tx *sqlx.Tx) bool {
 	return false
 }
 
+// GetRequestObjectById returns the requested object
+func GetRequestObjectById(db *sqlx.DB, id models.RequestID) (*RequestObject, error) {
+	var request RequestObject
+	err := db.Get(&request, selectRequestObjectSQL, id)
+	if err != nil {
+		return &RequestObject{}, err
+	}
+	return &request, nil
+}
+
 // updateRequest is used by consumers to update request in the db
-func (r *RequestObj) updateRequest(tx *sqlx.Tx) {
+func (r *RequestObject) updateRequest(tx *sqlx.Tx) {
 	_, err := tx.NamedExec(updateRequestSQL, r)
 	if err != nil {
 		log.WithError(err).Error("Error updating request status")
@@ -104,7 +135,7 @@ func (r *RequestObj) updateRequest(tx *sqlx.Tx) {
 }
 
 // updateCCServerStatus updates the status for CC servers on the request
-func (r *RequestObj) updateCCServerStatus(tx *sqlx.Tx) {
+func (r *RequestObject) updateCCServerStatus(tx *sqlx.Tx) {
 	_, err := tx.NamedExec(`UPDATE requests SET cc_servers_status = :cc_servers_status WHERE id = :id`, r)
 	if err != nil {
 		log.WithError(err).Error("Error updating request CC Server Status!")
@@ -113,19 +144,19 @@ func (r *RequestObj) updateCCServerStatus(tx *sqlx.Tx) {
 }
 
 // updateRequestStatus
-func (r *RequestObj) updateRequestStatus(tx *sqlx.Tx) {
+func (r *RequestObject) updateRequestStatus(tx *sqlx.Tx) {
 	_, err := tx.NamedExec(updateStatusSQL, r)
 	if err != nil {
 		log.WithError(err).Error("Error updating request")
 	}
 }
 
-// withStatus updates the RequestObj status with passed value
-func (r *RequestObj) withStatus(s models.RequestStatus) *RequestObj { r.Status = s; return r }
+// WithStatus updates the RequestObj status with passed value
+func (r *RequestObject) WithStatus(s models.RequestStatus) *RequestObject { r.Status = s; return r }
 
 // canSendRequest checks if a queued request is eligible for sending
 // based on constraints on request and the receiving servers
-func (r *RequestObj) canSendRequest(tx *sqlx.Tx, server models.Server, serverInCC bool) bool {
+func (r *RequestObject) canSendRequest(tx *sqlx.Tx, server models.Server, serverInCC bool) bool {
 	reason := ""
 	log.WithField("Reason", reason)
 	if !config.AirQoIntegratorConf.Server.SyncOn {
@@ -318,7 +349,7 @@ func (r *RequestObj) canSendRequest(tx *sqlx.Tx, server models.Server, serverInC
 
 }
 
-func (r *RequestObj) unMarshalBody() (interface{}, error) {
+func (r *RequestObject) unMarshalBody() (interface{}, error) {
 	var data interface{}
 	switch r.ObjectType {
 	case "ORGANISATION_UNITS":
@@ -339,7 +370,7 @@ func (r *RequestObj) unMarshalBody() (interface{}, error) {
 }
 
 // sendRequest sends request to destination server
-func (r *RequestObj) sendRequest(destination models.Server) (*http.Response, error) {
+func (r *RequestObject) sendRequest(destination models.Server) (*http.Response, error) {
 	data, err := r.unMarshalBody()
 	if err != nil {
 		return nil, err
@@ -353,7 +384,13 @@ func (r *RequestObj) sendRequest(destination models.Server) (*http.Response, err
 	if len(r.URLSurffix) > 1 {
 		destURL += r.URLSurffix
 	}
-	req, err := http.NewRequest(destination.HTTPMethod(), destURL, bytes.NewReader(marshalled))
+	completeURL := AddParamsToURL(destURL, destination.URLParams())
+	log.WithFields(log.Fields{
+		"request": r.ID,
+		"server":  destination.ID(),
+		"url":     completeURL,
+	}).Info("Sending request to destination server")
+	req, err := http.NewRequest(destination.HTTPMethod(), completeURL, bytes.NewReader(marshalled))
 
 	switch destination.AuthMethod() {
 	case "Token":
@@ -455,7 +492,6 @@ func Produce(db *sqlx.DB, jobs chan<- int, wg *sync.WaitGroup, mutex *sync.Mutex
 		_ = rows.Close()
 		if requestsCount > 0 {
 			log.WithField("requestsAdded", requestsCount).Info("Fetched Requests")
-			log.Info(fmt.Sprintf("Going to sleep for: %v", config.AirQoIntegratorConf.Server.RequestProcessInterval))
 		}
 		// Not good enough but let's bare with the sleep this initial version
 		time.Sleep(
@@ -471,7 +507,7 @@ func Consume(db *sqlx.DB, worker int, jobs <-chan int, wg *sync.WaitGroup, mutex
 	for req := range jobs {
 		fmt.Printf("Message %v is consumed by worker %v.\n", req, worker)
 
-		reqObj := RequestObj{}
+		reqObj := RequestObject{}
 		tx := db.MustBegin()
 		err := tx.QueryRowx(`
                 SELECT
@@ -492,7 +528,7 @@ func Consume(db *sqlx.DB, worker int, jobs <-chan int, wg *sync.WaitGroup, mutex
 		// log.WithFields(log.Fields{"servers": models.ServerMap}).Info("Servers")
 		if reqDestination, ok := models.ServerMap[fmt.Sprintf("%d", reqObj.Destination)]; ok {
 			if config.AirQoIntegratorConf.Server.FakeSyncToBaseDHIS2 {
-				reqObj.withStatus(models.RequestStatusCompleted).updateRequestStatus(tx)
+				reqObj.WithStatus(models.RequestStatusCompleted).updateRequestStatus(tx)
 				reqObj.StatusCode = "FAKED"
 				reqObj.updateRequest(tx)
 			} else {
@@ -541,7 +577,7 @@ func Consume(db *sqlx.DB, worker int, jobs <-chan int, wg *sync.WaitGroup, mutex
 }
 
 // ProcessRequest handles a ready request
-func ProcessRequest(tx *sqlx.Tx, reqObj RequestObj, destination models.Server, serverInCC, skipCheck bool) error {
+func ProcessRequest(tx *sqlx.Tx, reqObj RequestObject, destination models.Server, serverInCC, skipCheck bool) error {
 	if skipCheck || reqObj.canSendRequest(tx, destination, serverInCC) {
 		log.WithFields(log.Fields{"requestID": reqObj.ID}).Info("Request can be processed")
 		// send request
@@ -605,7 +641,7 @@ func ProcessRequest(tx *sqlx.Tx, reqObj RequestObj, destination models.Server, s
 					reqObj.Retries += 1
 					reqObj.Status = models.RequestStatusCompleted
 					reqObj.updateRequest(tx)
-					reqObj.withStatus(models.RequestStatusCompleted).updateRequestStatus(tx)
+					reqObj.WithStatus(models.RequestStatusCompleted).updateRequestStatus(tx)
 				}
 				log.WithFields(log.Fields{
 					"status":     result.Response.Status,
@@ -619,9 +655,10 @@ func ProcessRequest(tx *sqlx.Tx, reqObj RequestObj, destination models.Server, s
 				// reqObj.CCServersStatus.Scan()
 				return nil
 			} else {
+				bodyBytes, _ := io.ReadAll(resp.Body)
 				log.WithFields(log.Fields{
 					"requestID": reqObj.ID, "responseStatus": resp.StatusCode, "ServerInCC": serverInCC,
-				}).Warn("A non 200 response")
+				}).Infof("Non 200 response: %d, Resp: %v", resp.StatusCode, string(bodyBytes))
 				if serverInCC {
 					serverStatus := reqObj.CCServersStatus[fmt.Sprintf("%d", destination.ID())].(map[string]interface{})
 					// summary := fmt.Sprintf("Created: 0, Updated: 0")
@@ -650,21 +687,90 @@ func ProcessRequest(tx *sqlx.Tx, reqObj RequestObj, destination models.Server, s
 				}
 			}
 		} else {
-			// var result map[string]interface{}
-			// json.NewDecoder(resp.Body).Decode(&result)
+			// We are using Async
 			bodyBytes, err := io.ReadAll(resp.Body)
 			if err != nil {
-				reqObj.withStatus(models.RequestStatusFailed).updateRequestStatus(tx)
+				reqObj.WithStatus(models.RequestStatusFailed).updateRequestStatus(tx)
 				log.WithError(err).Error("Could not read response")
 				return err
 			}
-			log.WithField("responseBytes", bodyBytes).Info("Response Payload")
+			log.WithField("responseBytes", string(bodyBytes)).Info("Response Payload")
 			if resp.StatusCode/100 == 2 {
 				v, _, _, err := jsonparser.Get(bodyBytes, "status")
 				if err != nil {
 					log.WithError(err).Error("No status field found by jsonparser")
 				}
 				fmt.Println(v)
+				jobId, err := jsonparser.GetString(bodyBytes, "response", "id")
+				if err != nil {
+					log.WithError(err).Error("No job id found by jsonparser in asyn response")
+					return err
+				}
+				jobType, _ := jsonparser.GetString(bodyBytes, "response", "jobType")
+				// Create Async Schedule
+				scheduleId, err := models.CreateAsyncJobSchedule(
+					tx, reqObj.ID, destination.ID(), serverInCC, jobType, jobId)
+				if err != nil {
+					log.WithError(err).Error("Failed to create async job schedule")
+					return err
+				}
+				log.WithFields(log.Fields{
+					"scheduleID": scheduleId, "requestID": reqObj.ID}).Info("Created Async Job Schedule")
+				if serverInCC {
+					serverStatus := reqObj.CCServersStatus[fmt.Sprintf("%d", destination.ID())].(map[string]interface{})
+					summary := fmt.Sprintf("Async job sent to server")
+					newServerStatus := make(map[string]interface{})
+					newServerStatus["errors"] = summary
+					newServerStatus["status"] = models.RequestStatusCompleted
+					newServerStatus["statusCode"] = fmt.Sprintf("%d", resp.StatusCode)
+					switch serverStatus["retries"].(type) {
+					case float64:
+						newServerStatus["retries"] = int(serverStatus["retries"].(float64) + 1)
+					case int:
+						newServerStatus["retries"] = serverStatus["retries"].(int) + 1
+					}
+					reqObj.CCServersStatus[fmt.Sprintf("%d", destination.ID())] = newServerStatus
+					// reqObj.updateCCServerStatus(tx)
+					_, _ = tx.NamedExec(`UPDATE requests SET cc_servers_status = :cc_servers_status WHERE id = :id`, reqObj)
+
+				} else {
+					summary := fmt.Sprintf("Async job sent to server")
+					reqObj.StatusCode = fmt.Sprintf("%d", resp.StatusCode)
+					reqObj.Errors = summary
+					reqObj.Retries += 1
+					reqObj.Status = models.RequestStatusCompleted
+					reqObj.updateRequest(tx)
+					reqObj.WithStatus(models.RequestStatusCompleted).updateRequestStatus(tx)
+				}
+			} else {
+				log.WithFields(log.Fields{
+					"requestID": reqObj.ID, "responseStatus": resp.StatusCode, "ServerInCC": serverInCC,
+				}).Warn("A non 200 response from async request")
+
+				if serverInCC {
+					serverStatus := reqObj.CCServersStatus[fmt.Sprintf("%d", destination.ID())].(map[string]interface{})
+					newServerStatus := make(map[string]interface{})
+					newServerStatus["status"] = "failed"
+					newServerStatus["statusCode"] = fmt.Sprintf("%d", resp.StatusCode)
+					switch serverStatus["retries"].(type) {
+					case float64:
+						newServerStatus["retries"] = int(serverStatus["retries"].(float64) + 1)
+					case int:
+						newServerStatus["retries"] = serverStatus["retries"].(int) + 1
+					}
+					newServerStatus["errors"] = "server possibly unreachable"
+					reqObj.CCServersStatus[fmt.Sprintf("%d", destination.ID())] = newServerStatus
+					_, _ = tx.NamedExec(`UPDATE requests SET cc_servers_status = :cc_servers_status WHERE id = :id`, reqObj)
+
+				} else {
+					reqObj.StatusCode = fmt.Sprintf("%d", resp.StatusCode)
+					reqObj.Status = models.RequestStatusFailed
+					reqObj.Errors = "request might have conflicts while async request"
+					reqObj.Retries += 1
+					reqObj.Response = string(bodyBytes)
+					reqObj.updateRequest(tx)
+				}
+
 			}
 
 		}
@@ -722,7 +828,7 @@ func RetryIncompleteRequests() {
 	}
 
 	for rows.Next() {
-		reqObj := RequestObj{}
+		reqObj := RequestObject{}
 		err := rows.StructScan(&reqObj)
 		if err != nil {
 			log.WithError(err).Error("Error reading incomplete request for processing")
@@ -736,14 +842,14 @@ func RetryIncompleteRequests() {
 				if reqObj.Retries <= config.AirQoIntegratorConf.Server.MaxRetries {
 					if config.AirQoIntegratorConf.Server.FakeSyncToBaseDHIS2 {
 						reqObj.StatusCode = "FAKED"
-						reqObj.withStatus(models.RequestStatusCompleted).updateRequestStatus(tx)
+						reqObj.WithStatus(models.RequestStatusCompleted).updateRequestStatus(tx)
 						reqObj.updateRequest(tx)
 
 					} else {
 						_ = ProcessRequest(tx, reqObj, reqDestination, false, true)
 					}
 				} else {
-					reqObj.withStatus(models.RequestStatusExpired).updateRequestStatus(tx)
+					reqObj.WithStatus(models.RequestStatusExpired).updateRequestStatus(tx)
 				}
 
 				lo.Map(reqObj.CCServers, func(item int32, index int) error {
@@ -788,7 +894,7 @@ func RetryIncompleteRequests() {
 								"Retries":     ccServerStatus["retries"],
 								"RequestID":   reqObj.ID,
 							}).Info("Skipping incomplete request retry. Max retries exceeded!")
-						reqObj.withStatus(models.RequestStatusExpired).updateRequestStatus(tx)
+						reqObj.WithStatus(models.RequestStatusExpired).updateRequestStatus(tx)
 						return nil
 					}
 				} else {

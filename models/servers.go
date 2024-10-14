@@ -193,6 +193,9 @@ func (s *Server) CreatedOn() time.Time { return s.s.Created }
 // UpdatedOn return time when server/app was updated
 func (s *Server) UpdatedOn() time.Time { return s.s.Updated }
 
+// URLParams returns the server URL parameters
+func (s *Server) URLParams() dbutils.MapAnything { return s.s.URLParams }
+
 // CompleteURL returns server URL plus its URLParams
 func (s *Server) CompleteURL() string {
 	p := url.Values{}
@@ -208,18 +211,22 @@ func (s *Server) CompleteURL() string {
 	return sURL
 }
 
-// GetServerByID returns server object using id
-//func GetServerByID(id int64) Server {
-//	srv := Server{}
-//	err := db.GetDB().Get(&srv.s, "SELECT * FROM servers WHERE id = $1", id)
-//
-//	if err != nil {
-//		fmt.Printf("Error geting server: [%v]", err)
-//		return Server{}
-//	}
-//	return srv
+//func (s *Server) NewClient() *clients.Client {
 //
 //}
+
+// GetServerByID returns server object using id
+func GetServerByID(id int64) Server {
+	srv := Server{}
+	err := db.GetDB().Get(&srv.s, "SELECT * FROM servers WHERE id = $1", id)
+
+	if err != nil {
+		fmt.Printf("Error getting server: [%v]", err)
+		return Server{}
+	}
+	return srv
+
+}
 
 // GetServerByName returns server object using id
 func GetServerByName(name string) (Server, error) {
@@ -363,9 +370,9 @@ func GetServers(db *sqlx.DB, page string, pageSize string,
 const insertServerSQL = `
 INSERT INTO servers(uid, name, username, password, url, ipaddress, http_method, auth_method, auth_token,
        callback_url, allow_callbacks, cc_urls, allow_copies, start_submission_period, end_submission_period,
-       parse_responses, use_ssl, suspended, ssl_client_certkey_file, json_response_xpath, xml_response_xpath, endpoint_type, url_params)
+       parse_responses, use_async, use_ssl, suspended, ssl_client_certkey_file, json_response_xpath, xml_response_xpath, endpoint_type, url_params)
        VALUES (:uid,:name,:username,:password,:url,:ipaddress,:http_method,:auth_method,:auth_token, :callback_url,:allow_callbacks, 
-               :cc_urls,:allow_copies,:start_submission_period,:end_submission_period,:parse_responses,:use_ssl,
+               :cc_urls,:allow_copies,:start_submission_period,:end_submission_period,:parse_responses,:use_async, :use_ssl,
                :suspended,:ssl_client_certkey_file,:json_response_xpath,:xml_response_xpath, :endpoint_type, :url_params)
 	RETURNING id
 `
@@ -473,9 +480,9 @@ func CreateServerFromJSON(db *sqlx.DB, serverJSON []byte) (Server, error) {
 const updateServerSQL = `
 UPDATE servers SET (name, username, password, url, ipaddress, http_method,auth_method, auth_token,
        callback_url, allow_callbacks, cc_urls, allow_copies, start_submission_period, end_submission_period,
-       parse_responses, use_ssl, suspended, ssl_client_certkey_file, json_response_xpath, xml_response_xpath, endpoint_type, url_params)
+       parse_responses, use_async, use_ssl, suspended, ssl_client_certkey_file, json_response_xpath, xml_response_xpath, endpoint_type, url_params)
 	= (:name,:username,:password,:url,:ipaddress,:http_method,:auth_method,:auth_token, :callback_url,:allow_callbacks, 
-               :cc_urls,:allow_copies,:start_submission_period,:end_submission_period,:parse_responses,:use_ssl,
+               :cc_urls,:allow_copies,:start_submission_period,:end_submission_period,:parse_responses,:use_async, :use_ssl,
                :suspended,:ssl_client_certkey_file,:json_response_xpath,:xml_response_xpath, :endpoint_type, :url_params)
 	WHERE uid = :uid
 `

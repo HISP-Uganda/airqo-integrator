@@ -14,6 +14,8 @@ import (
 	"github.com/twpayne/go-geom/encoding/geojson"
 	"reflect"
 	"regexp"
+	"strconv"
+	"strings"
 )
 
 type Geometry struct {
@@ -326,16 +328,6 @@ func (o *OrganisationUnit) OrgUnitDHIS2Payload() []byte {
 	return ret
 }
 
-func GetOUByMFLParentId(mflParentId string) dbutils.Int {
-	dbConn := db.GetDB()
-	var id dbutils.Int
-	err := dbConn.Get(&id, `SELECT id FROM organisationunit WHERE mflid = $1`, mflParentId)
-	if err != nil {
-		log.WithError(err).Info("Failed to get organisation unit")
-	}
-	return id
-}
-
 func (o *OrganisationUnit) OrganisationUnitDBFields() []string {
 	e := reflect.ValueOf(o).Elem()
 	var ret []string
@@ -394,6 +386,66 @@ func (o *OrganisationUnit) NewOrgUnit() {
 		}
 	}
 	_ = rows.Close()
+}
+
+// Children ...
+func (o *OrganisationUnit) Children() []*OrganisationUnit {
+	ouID := o.DBID()
+	ids, _ := OrgUnitChildren(ouID)
+	dbConn := db.GetDB()
+	children := make([]*OrganisationUnit, len(ids))
+	for i, id := range ids {
+		child := &OrganisationUnit{}
+		err := dbConn.Get(child, "SELECT id, uid, name FROM organisationunit WHERE id = $1", id)
+		if err != nil {
+			// log.WithError(err).WithField("ID", id).Error("Failed to get Organisation Unit")
+			continue
+		}
+		children[i] = child
+	}
+	return children
+}
+
+// GetOrganisationUnitByID ...
+func GetOrganisationUnitByID(id int64) (*OrganisationUnit, error) {
+	dbConn := db.GetDB()
+	ou := &OrganisationUnit{}
+	err := dbConn.Get(ou,
+		"SELECT id, uid, name, parentid, hierarchylevel, path FROM organisationunit WHERE id = $1", id)
+	if err != nil {
+		return nil, err
+	}
+	return ou, nil
+}
+
+// GetOrganisationUnitsByNames returns a list of organisationunit id given a slice of names
+func GetOrganisationUnitsByNames(names []string) ([]int64, error) {
+	dbConn := db.GetDB()
+	var ids []int64
+
+	// Create placeholders for each name
+	placeholders := make([]string, len(names))
+	for i := range names {
+		placeholders[i] = "$" + strconv.Itoa(i+1) // PostgreSQL placeholders are 1-based
+	}
+
+	// Create the query with the placeholders
+	query := `SELECT id FROM organisationunit WHERE hierarchylevel = 3 AND name IN (` +
+		strings.Join(placeholders, ", ") + `)`
+
+	// Convert []string to []interface{}
+	args := make([]interface{}, len(names))
+	for i, v := range names {
+		args[i] = v
+	}
+
+	// Execute the query, passing the names as arguments
+	err := dbConn.Select(&ids, query, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	return ids, nil
 }
 
 // OrgUnitChildren returns a slice of ids with organisationunit's children
@@ -604,51 +656,6 @@ type OrgUnitRevision struct {
 	District            string              `db:"district" json:"district,omitempty"`
 	Created             string              `db:"created" json:"created,omitempty"`
 	Updated             string              `db:"updated" json:"updated,omitempty"`
-}
-
-func (o *OrganisationUnit) GetLatestRevision() []byte {
-	dbConn := db.GetDB()
-	var definition dbutils.MapAnything
-	err := dbConn.Get(&definition, `SELECT 
-		definition FROM orgunitrevision WHERE orgunitrevision.organisationunit_id = $1 
-		ORDER BY revision DESC LIMIT 1`, o.DBID())
-	if err != nil {
-		log.WithField("Facility UID", o.UID).WithError(err).Info("Failed to Get Facility's latest revision")
-		return []byte(`{}`)
-	}
-	ret, _ := json.Marshal(definition)
-	return ret
-}
-
-// GetCurrentVersion returns the latest version number for the facility.
-func (r *OrgUnitRevision) GetCurrentVersion() int64 {
-	dbConn := db.GetDB()
-	var count int64
-	err := dbConn.Get(&count, `SELECT 
-    	CASE WHEN max(revision) IS NULL THEN 0 ELSE max(revision) END 
-		FROM orgunitrevision WHERE organisationunit_id = $1`, r.OrganisationUnitUID)
-	if err != nil {
-		log.WithError(err).Info("Failed to get current version")
-		return 0
-	}
-	return count
-}
-
-// NewOrgUnitRevision creates a new revision for facility in the db and increments version number
-func (r *OrgUnitRevision) NewOrgUnitRevision() {
-	dbConn := db.GetDB()
-	r.Revision = r.GetCurrentVersion() + 1
-	_, err := dbConn.NamedExec(`INSERT INTO orgunitrevision(uid, organisationunit_id, is_active, 
-                            revision, definition, district) VALUES (:uid, :organisationunit_id, TRUE, :revision, :definition, :district)`, r)
-	if err != nil {
-		log.WithError(err).Info("Failed to Log Failure")
-		return
-	}
-	_, err = dbConn.NamedExec(`UPDATE orgunitrevision SET is_active= False 
-        WHERE organisationunit_id = :organisationunit_id AND uid <> :uid`, r)
-	if err != nil {
-		log.WithError(err).Error("Failed to deactivate previous revisions for facility")
-	}
 }
 
 type OrgUnitFailure struct {

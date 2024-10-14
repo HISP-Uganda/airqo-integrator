@@ -193,6 +193,44 @@ func (s *Site) GetDhis2District() (int64, error) {
 
 }
 
+// GetSiteDistricts returns a slice of distinct dhis2_districts from the sites table
+func GetSiteDistricts() ([]int64, error) {
+	var districts []int64
+	dbConn := db.GetDB()
+	err := dbConn.Select(&districts, `
+    SELECT DISTINCT dhis2_district FROM sites 
+	WHERE dhis2_district IS NOT NULL AND dhis2_district > 0`)
+	if err != nil {
+		return nil, err
+	}
+	return districts, nil
+}
+
+// GetSubCountiesByDhis2District returns a slice of int64 matching current_subcounty given dhis2_district from sites table
+func GetSubCountiesByDhis2District(districtID int64) ([]int64, error) {
+	var subCounties []int64
+	dbConn := db.GetDB()
+	err := dbConn.Select(&subCounties, `
+    SELECT DISTINCT current_subcounty FROM sites 
+		WHERE dhis2_district = $1 AND current_subcounty > 0`, districtID)
+	if err != nil {
+		return nil, err
+	}
+	return subCounties, nil
+}
+
+// GetSitesByCurrentSubCounty returns a slice of int64 matching current_subcounty
+func GetSitesByCurrentSubCounty(subcountyID int64) ([]Site, error) {
+	var sites []Site
+	dbConn := db.GetDB()
+	err := dbConn.Select(&sites, `
+    SELECT id,uid FROM sites WHERE current_subcounty = $1`, subcountyID)
+	if err != nil {
+		return nil, err
+	}
+	return sites, nil
+}
+
 // UpdateDhis2District updates the site's dhis2_district field given an int64 representing district
 func (s *Site) UpdateDhis2District(districtID int64) error {
 	dbConn := db.GetDB()
@@ -245,6 +283,7 @@ func LoadSites() error {
 		}
 		dhis2District, er := site.GetDhis2District()
 		if er == nil {
+			// log.Infof("Site: %v, District: %v, DistrictID: %v", site.UID, site.District, dhis2District)
 			err = site.UpdateDhis2District(dhis2District)
 			if err != nil {
 				continue
@@ -257,7 +296,6 @@ func LoadSites() error {
 			for _, sc := range subCounties {
 				isInOu, _ := IsPointInOrganisationUnit(sc, site.Longitude, site.Latitude)
 				if isInOu {
-					log.Infof("Site: %v, Subcounty: %v, Is Inside: %v", site.UID, sc, isInOu)
 					err = site.UpdateCurrentSubCounty(sc)
 					if err != nil {
 						continue
@@ -298,4 +336,27 @@ func fetchSitesFromAPI() ([]Site, error) {
 	// log.WithFields(log.Fields{"Grids": grids}).Info("Fetched Grids")
 	// resp, err := client.
 	return sites, nil
+}
+
+// FetchSiteMeasurements ...
+func FetchSiteMeasurements(site string, startDate, endDate time.Time) (MeasurementResponse, error) {
+	// turn startDate into a string
+	startDateStr := startDate.Format("2006-01-02")
+	endDateStr := endDate.Format("2006-01-02")
+
+	params := map[string]string{
+		"token":     config.AirQoIntegratorConf.API.AIRQOToken,
+		"startTime": startDateStr,
+		"endTime":   endDateStr,
+	}
+
+	resp, err := clients.AirQoClient.GetResource("/devices/measurements/sites/"+site+"/historical", params)
+	if err != nil {
+		log.WithError(err).Error("Failed to get site measurements")
+		return MeasurementResponse{}, err
+	}
+	var mrs MeasurementResponse
+	err = json.Unmarshal(resp.Body(), &mrs)
+	// log.Infof("Site Measurements: %v", string(resp.Body()))
+	return mrs, err
 }

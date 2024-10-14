@@ -71,6 +71,9 @@ type Request struct {
 		BodyIsQueryParams  bool          `db:"body_is_query_param" json:"bodyIsQueryParams,omitempty"` // whether body is to be used a query parameters
 		SubmissionID       string        `db:"submissionid" json:"submissionId,omitempty"`             // a reference ID is source system
 		URLSuffix          string        `db:"url_suffix" json:"urlSuffix,omitempty"`
+		AsyncJobID         string        `db:"async_jobid" json:"AsyncJobID,omitempty"`
+		AsyncResponse      string        `db:"async_response" json:"AsyncResponse,omitempty"`
+		AsyncStatus        string        `db:"async_status" json:"AsyncStatus,omitempty"`
 		Created            time.Time     `db:"created" json:"created,omitempty"`
 		Updated            time.Time     `db:"updated" json:"updated,omitempty"`
 		// OrgID              OrgID         `db:"org_id" json:"org_id"` // Lets add these later
@@ -407,6 +410,8 @@ func (rq *RequestForm) Save(db *sqlx.DB) (Request, error) {
 		r.ID = RequestID(reqId.Int64)
 	}
 	_ = rows.Close()
+	// commit the request
+
 	return *req, nil
 }
 

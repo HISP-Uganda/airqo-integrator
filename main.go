@@ -54,11 +54,12 @@ func main() {
 		if !*config.SkipOUSync {
 			log.WithFields(log.Fields{"SyncCronExpression": config.AirQoIntegratorConf.API.AIRQOSyncCronExpression}).Info(
 				"Facility Synchronisation Cron Expression")
-			//_, err := s.Cron(config.MFLIntegratorConf.API.MFLSyncCronExpression).Do(FetchFacilitiesByDistrict)
-			//if err != nil {
-			//	log.WithError(err).Error("Error scheduling facility sync task:")
-			//	return
-			//}
+			_, err := s.Cron(config.AirQoIntegratorConf.API.AIRQOSyncCronExpression).Do(
+				SendAirQoClimateData2, time.Now().Add(-24*time.Hour), time.Now())
+			if err != nil {
+				log.WithError(err).Error("Error scheduling measurements sync task:")
+				return
+			}
 		}
 
 		// retrying incomplete requests runs every 5 minutes
@@ -84,6 +85,20 @@ func main() {
 		_ = models.LoadSites()
 		_ = models.LoadGrids()
 
+		// SendAirQoClimateData()
+		if !*config.SkipFectchingByDate {
+			startDate, err := time.Parse("2006-01-02", *config.StartDate)
+			if err != nil {
+				fmt.Println("Error parsing start date:", err)
+				return
+			}
+			endDate, err := time.Parse("2006-01-02", *config.EndDate)
+			if err != nil {
+				fmt.Println("Error parsing end date:", err)
+				return
+			}
+			SendAirQoClimateData2(startDate, endDate)
+		}
 	}()
 
 	jobs := make(chan int)
@@ -104,6 +119,19 @@ func main() {
 		wg.Add(1)
 		go StartConsumers(jobs, &wg, rWMutex, seenMap)
 	}
+	scheduledJobs := make(chan int64)
+	workingOn := make(map[int64]bool)
+	var workingOnMutex = &sync.Mutex{}
+	var rWworkingOnMutex = &sync.RWMutex{}
+
+	if !*config.SkipScheduleProcessing {
+		wg.Add(1)
+		go ProduceSchedules(dbConn, scheduledJobs, &wg, workingOnMutex, workingOn)
+
+		wg.Add(1)
+		go StartScheduleConsumers(scheduledJobs, &wg, rWworkingOnMutex, workingOn)
+
+	}
 
 	// Start the backend API gin server
 	if !*config.DisableHTTPServer {
@@ -112,6 +140,8 @@ func main() {
 	}
 
 	wg.Wait()
+	close(scheduledJobs)
+	close(jobs)
 }
 
 func startAPIServer(wg *sync.WaitGroup) {
@@ -122,6 +152,11 @@ func startAPIServer(wg *sync.WaitGroup) {
 		v2.GET("/test2", func(c *gin.Context) {
 			c.String(200, "Authorized")
 		})
+
+		tk := new(controllers.TokenController)
+		v2.GET("/getToken", tk.GetActiveToken)
+		v2.GET("/generateToken", tk.GenerateNewToken)
+		v2.DELETE("/deleteTokens", tk.DeleteInactiveTokens)
 
 		q := new(controllers.QueueController)
 		v2.POST("/queue", q.Queue)
@@ -146,6 +181,13 @@ func startAPIServer(wg *sync.WaitGroup) {
 		ad := new(controllers.AdminController)
 		v2.GET("/clearDistrictRequests/:district", ad.ClearRequestsByDistrict)
 		v2.GET("/clearBatchRequests/:batch", ad.ClearRequestsByBatch)
+
+		sc := new(controllers.ScheduleController)
+		v2.GET("/schedules", sc.ListSchedules)
+		v2.POST("/schedules", sc.NewSchedule)
+		v2.GET("/schedules/:id", sc.GetSchedule)
+		v2.POST("/schedules/:id", sc.UpdateSchedule)
+		v2.DELETE("/schedules/:id", sc.DeleteSchedule)
 
 	}
 	// Handle error response when a route is not defined
