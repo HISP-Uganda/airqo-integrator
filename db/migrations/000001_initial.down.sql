@@ -9,6 +9,7 @@ DROP TABLE IF EXISTS requests;
 DROP TABLE IF EXISTS server_allowed_sources;
 DROP TABLE IF EXISTS servers;
 DROP TABLE IF EXISTS orgunitgroupmembers;
+DROP TABLE IF EXISTS orgunitfailure;
 DROP TABLE IF EXISTS organisationunit ;
 DROP TABLE IF EXISTS orgunitgroup;
 DROP TABLE IF EXISTS orgunitlevel;
@@ -17,6 +18,7 @@ DROP TABLE IF EXISTS users;
 DROP TABLE IF EXISTS user_role_permissions;
 DROP TABLE IF EXISTS user_roles;
 
+DROP FUNCTION IF EXISTS generate_uid();
 DROP FUNCTION IF EXISTS body_pprint ( text);
 DROP FUNCTION IF EXISTS pp_json ( text, boolean, text);
 DROP FUNCTION IF EXISTS is_valid_json ( text) ;

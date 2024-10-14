@@ -91,6 +91,24 @@ CREATE TABLE orgunitgroupmembers
 
 );
 
+CREATE TABLE orgunitfailure
+(
+    id           BIGSERIAL NOT NULL PRIMARY KEY,
+    uid          TEXT      NOT NULL UNIQUE,
+    facility_uid TEXT      NOT NULL,
+    mfluid       TEXT      NOT NULL,
+    action       TEXT,
+    reason       TEXT,
+    object       JSONB     NOT NULL DEFAULT '{}'::jsonb,
+    created      TIMESTAMPTZ        DEFAULT CURRENT_TIMESTAMP,
+    updated      TIMESTAMPTZ        DEFAULT CURRENT_TIMESTAMP
+
+);
+CREATE INDEX orgunitfailure_uid_idx ON orgunitfailure(uid);
+CREATE INDEX orgunitfailure_facility_uid_idx ON orgunitfailure(facility_uid);
+CREATE INDEX orgunitfailure_mfluid_idx ON orgunitfailure(mfluid);
+CREATE INDEX orgunitfailure_created_idx ON orgunitfailure(created);
+
 CREATE TABLE IF NOT EXISTS user_roles
 (
     id          BIGSERIAL NOT NULL PRIMARY KEY,
@@ -133,6 +151,16 @@ CREATE TABLE IF NOT EXISTS users
 );
 
 CREATE INDEX users_username_idx ON users (username);
+
+CREATE TABLE IF NOT EXISTS user_apitoken
+(
+    id        bigserial NOT NULL PRIMARY KEY,
+    user_id   BIGINT    NOT NULL REFERENCES users (id) ON DELETE CASCADE ON UPDATE CASCADE,
+    token     TEXT      NOT NULL DEFAULT '',
+    is_active BOOLEAN   NOT NULL DEFAULT TRUE,
+    created   timestamptz        DEFAULT CURRENT_TIMESTAMP,
+    updated   timestamptz        DEFAULT CURRENT_TIMESTAMP
+);
 
 CREATE TABLE servers
 (
@@ -202,6 +230,10 @@ CREATE TABLE requests
     statuscode          text                           DEFAULT '',
     retries             INTEGER               NOT NULL DEFAULT 0,
     errors              TEXT                           DEFAULT '', -- indicative response message
+    is_async            BOOLEAN               NOT NULL DEFAULT FALSE,
+    async_jobid         TEXT                  NOT NULL DEFAULT '',
+    async_response      TEXT                  NOT NULL DEFAULT '',
+    async_status        TEXT                  NOT NULL DEFAULT '',
     submissionid        TEXT                  NOT NULL DEFAULT '', -- message_id in source app -> helpful when check for already sent submissions
     frequency_type      TEXT                  NOT NULL DEFAULT '',
     period              TEXT                  NOT NULL DEFAULT '', --whether ssl is enabled for this server/app
@@ -262,27 +294,37 @@ CREATE INDEX audit_log_action ON audit_log (action);
 
 CREATE TABLE schedules
 (
-    id            bigserial   NOT NULL PRIMARY KEY,
-    sched_type    TEXT        NOT NULL DEFAULT 'sms' CHECK (sched_type IN ('sms', 'contact_push', 'url', 'command')), -- also 'push_contact'
-    params        JSON        NOT NULL DEFAULT '{}'::json,
-    sched_content TEXT,                                                                                               -- body of scheduled url call
-    sched_url     TEXT                 DEFAULT '',
-    command       TEXT                 DEFAULT '',
-    command_args  TEXT,
-    first_run_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,                                                     -- when to push first.
-    repeat        varchar(16) NOT NULL DEFAULT 'never' CHECK (repeat IN ('never', 'daily', 'weekly', 'monthly', 'yearly')),
-    last_run_at   TIMESTAMPTZ,                                                                                        -- when last ran
-    next_run_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    status        text        NOT NULL DEFAULT 'ready' CHECK (status IN ('ready', 'skipped', 'sent', 'failed', 'error', 'completed')),
-    is_active     BOOLEAN     NOT NULL DEFAULT 't',
-    created_by    INTEGER REFERENCES users (id),
-    created       TIMESTAMPTZ          DEFAULT CURRENT_TIMESTAMP,
-    updated       TIMESTAMPTZ          DEFAULT CURRENT_TIMESTAMP
+    id              bigserial   NOT NULL PRIMARY KEY,
+    sched_type      TEXT        NOT NULL DEFAULT 'sms'
+        CHECK (sched_type IN ('sms', 'contact_push', 'url', 'command', 'dhis2_async_job_check')), -- also 'push_contact'
+    params          JSON        NOT NULL DEFAULT '{}'::json,
+    sched_url       TEXT                 DEFAULT '',
+    sched_content   TEXT,                                                                               -- body of scheduled url call
+    command         TEXT                 DEFAULT '',
+    command_args    TEXT,
+    repeat          varchar(16) NOT NULL DEFAULT 'never' CHECK (
+        repeat IN ('never', 'hourly', 'daily', 'weekly', 'monthly', 'yearly', 'interval', 'cron')),
+    repeat_interval INTEGER,
+    cron_expression TEXT,
+    first_run_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,                                     -- when to push first.
+    last_run_at     TIMESTAMPTZ,                                                                        -- when last ran
+    next_run_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    status          text        NOT NULL DEFAULT 'ready' CHECK (status IN ('ready', 'skipped', 'sent', 'failed', 'error', 'completed')),
+    is_active       BOOLEAN     NOT NULL DEFAULT 't',
+    async_job_type TEXT DEFAULT '',
+    async_jobid     TEXT                 DEFAULT '',                                                    -- if it is an async job
+    request_id      BIGINT REFERENCES requests (id),
+    server_id       BIGINT REFERENCES servers (id),
+    server_in_cc    BOOLEAN,
+    created_by      INTEGER REFERENCES users (id),
+    created         TIMESTAMPTZ          DEFAULT CURRENT_TIMESTAMP,
+    updated         TIMESTAMPTZ          DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX schedules_created ON schedules (created);
-CREATE INDEX schedules_first_run_at ON schedules (first_run_at);
-CREATE INDEX schedules_last_run_at ON schedules (last_run_at);
-CREATE INDEX schedules_next_run_at ON schedules (next_run_at);
+
+CREATE INDEX schedules_created ON schedules(created);
+CREATE INDEX schedules_first_run_at ON schedules(first_run_at);
+CREATE INDEX schedules_last_run_at ON schedules(last_run_at);
+CREATE INDEX schedules_next_run_at ON schedules(next_run_at);
 
 -- FUNCTIONS
 -- Check if source is an allowed 'source' for destination server/app dest
@@ -594,10 +636,25 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+CREATE OR REPLACE FUNCTION generate_uid()
+    RETURNS text
+
+AS $function$
+declare
+    chars  text [] := '{0,1,2,3,4,5,6,7,8,9,a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z,A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z}';
+    result text := chars [11 + random() * (array_length(chars, 1) - 11)];
+begin
+    for i in 1..10 loop
+            result := result || chars [1 + random() * (array_length(chars, 1) - 1)];
+        end loop;
+    return result;
+end;
+$function$ LANGUAGE plpgsql;
+
 -- Data Follows
-INSERT INTO servers (name, username, password, ipaddress, url, auth_method, auth_token)
-VALUES ('localhost', 'tester', 'foobar', '127.0.0.1', 'http://localhost:8080/test', 'Basic Auth', ''),
-       ('dhis2', 'admin', 'district', '127.0.0.1', 'http://localhost/api/dataValueSets', 'Token',
+INSERT INTO servers (uid, name, username, password, ipaddress, url, auth_method, auth_token)
+VALUES (generate_uid(), 'localhost', 'tester', 'foobar', '127.0.0.1', 'http://localhost:8080/test', 'Basic Auth', ''),
+       (generate_uid(), 'dhis2', 'admin', 'district', '127.0.0.1', 'http://localhost/api/dataValueSets', 'Token',
         'd2pat_yrpULZwF9iltNDB3SxCTqUxTchRK5Byx0832006526');
 
 INSERT INTO user_roles(name, description)
@@ -614,3 +671,162 @@ VALUES ('Samuel', 'Sekiwere', 'admin', crypt('@dm1n', gen_salt('bf')), 'sekiskyl
 INSERT INTO server_allowed_sources (server_id, allowed_sources)
 VALUES ((SELECT id FROM servers where name = 'dhis2'),
         (SELECT array_agg(id) FROM servers WHERE name in ('localhost')));
+
+-- ------------------------------------------------------------------------ --
+-- Cron Expression Parser for PostgreSQL                                    --
+--                                                                          --
+-- (C) 2021-2022 Chris Mair <chris@1006.org>                                --
+--                                                                          --
+-- see LICENSE for license information                                      --
+-- ------------------------------------------------------------------------ --
+
+
+create schema if not exists cronexp;
+drop function if exists cronexp.match(timestamp with time zone, text);
+drop function if exists cronexp.expand_field(text, int, int);
+drop function if exists cronexp.is_wellformed(text);
+
+
+create or replace function cronexp.expand_field(field text, min int, max int)
+    returns int[] as
+$$
+declare
+    part   text;
+    groups text[];
+    m      int;
+    n      int;
+    k      int;
+    ret    int[];
+    tmp    int[];
+begin
+
+    -- step 1: basic parameter check
+
+    if coalesce(field, '') = '' then
+        raise exception 'invalid parameter "field"';
+    end if;
+
+    if min is null or max is null or min < 0 or max < 0 or min > max then
+        raise exception 'invalid parameter(s) "min" or "max"';
+    end if;
+
+    -- step 2: handle special cases * and */k
+
+    if field = '*' then
+        select array_agg(x::int) into ret from generate_series(min, max) as x;
+        return ret;
+    end if;
+
+    if field ~ '^\*/\d+$' then
+        groups = regexp_matches(field, '^\*/(\d+)$');
+        k := groups[1];
+        if k < 1 or k > max then
+            raise exception 'invalid range step: expected a step between 1 and %, got %', max, k;
+        end if;
+        select array_agg(x::int) into ret from generate_series(min, max, k) as x;
+        return ret;
+    end if;
+
+    -- step 3: handle generic expression with values, lists or ranges
+
+    ret := '{}'::int[];
+    for part in select * from regexp_split_to_table(field, ',')
+        loop
+            if part ~ '^\d+$' then
+                n := part;
+                if n < min or n > max then
+                    raise exception 'value out of range: expected values between % and %, got %', min, max, n;
+                end if;
+                ret = ret || n;
+            elseif part ~ '^\d+-\d+$' then
+                groups = regexp_matches(part, '^(\d+)-(\d+)$');
+                m := groups[1];
+                n := groups[2];
+                if m > n then
+                    raise exception 'inverted range bounds';
+                end if;
+                if m < min or m > max or n < min or n > max then
+                    raise exception 'invalid range bound(s): expected bounds between % and %, got % and %', min, max, m, n;
+                end if;
+                select array_agg(x) into tmp from generate_series(m, n) as x;
+                ret := ret || tmp;
+            elseif part ~ '^\d+-\d+/\d+$' then
+                groups = regexp_matches(part, '^(\d+)-(\d+)/(\d+)$');
+                m := groups[1];
+                n := groups[2];
+                k := groups[3];
+                if m > n then
+                    raise exception 'inverted range bounds';
+                end if;
+                if m < min or m > max or n < min or n > max then
+                    raise exception 'invalid range bound(s): expected bounds between % and %, got % and %', min, max, m, n;
+                end if;
+                if k < 1 or k > max then
+                    raise exception 'invalid range step: expected a step between 1 and %, got %', max, k;
+                end if;
+                select array_agg(x) into tmp from generate_series(m, n, k) as x;
+                ret := ret || tmp;
+            else
+                raise exception 'invalid expression';
+            end if;
+        end loop;
+
+    select array_agg(x)
+    into ret
+    from (
+             select distinct unnest(ret) as x
+             order by x
+         ) as sub;
+    return ret;
+end;
+$$ language 'plpgsql' immutable;
+
+create or replace function cronexp.match(ts timestamp with time zone, exp text)
+    returns boolean as
+$$
+declare
+    field_min int[] := '{ 0,  0,  1,  1, 0}';
+    field_max int[] := '{59, 23, 31, 12, 7}';
+    groups    text[];
+    fields    int[];
+    ts_parts  int[];
+
+begin
+
+    if ts is null then
+        -- raise exception 'invalid parameter "ts": must not be null';
+        return false;
+    end if;
+
+    if exp is null then
+        -- raise exception 'invalid parameter "exp": must not be null';
+        return false;
+    end if;
+
+    groups = regexp_split_to_array(trim(exp), '\s+');
+    if array_length(groups, 1) != 5 then
+        -- raise exception 'invalid parameter "exp": five space-separated fields expected';
+        return false;
+    end if;
+
+    ts_parts[1] := date_part('minute', ts);
+    ts_parts[2] := date_part('hour', ts);
+    ts_parts[3] := date_part('day', ts);
+    ts_parts[4] := date_part('month', ts);
+    ts_parts[5] := date_part('dow', ts); -- Sunday = 0
+
+    for n in 1..5
+        loop
+            fields := cronexp.expand_field(groups[n], field_min[n], field_max[n]);
+            -- hack for DOW: fields might contain 0 or 7 for Sunday; if there's a 7, make sure there's a 0 too
+            if n = 5 and array [7] <@ fields then
+                fields := array [0] || fields;
+            end if;
+            if not array [ts_parts[n]] <@ fields then
+                return false;
+            end if;
+        end loop;
+
+    return true;
+end
+$$ language 'plpgsql' immutable;
