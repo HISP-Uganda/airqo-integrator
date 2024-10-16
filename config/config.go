@@ -19,7 +19,7 @@ import (
 // AirQoIntegratorConf is the global conf
 var AirQoIntegratorConf Config
 var ForceSync *bool
-var SkipOUSync *bool
+var SkipSync *bool
 var PilotMode *bool
 var StartDate *string
 var EndDate *string
@@ -58,7 +58,7 @@ func init() {
 	startDate := time.Now().Add(-24 * time.Hour).Format("2006-01-02")
 	endDate := time.Now().Format("2006-01-02")
 	ForceSync = flag.Bool("force-sync", false, "Whether to forcefully sync organisation unit hierarchy")
-	SkipOUSync = flag.Bool("skip-ousync", false, "Whether to skip ou and facility sync. But process requests")
+	SkipSync = flag.Bool("skip-sync", false, "Whether to skip measurements sync.")
 	PilotMode = flag.Bool("pilot-mode", false, "Whether we're running integrator in pilot mode")
 	StartDate = flag.String("start-date", startDate, "Date from which to start fetching data (YYYY-MM-DD)")
 	EndDate = flag.String("end-date", endDate, "Date until which to fetch data (YYYY-MM-DD)")
@@ -204,7 +204,7 @@ type Config struct {
 		AIRQOCCDHIS2UpdateServers      string `mapstructure:"airqo_cc_dhis2_update_servers"  env:"AIRQOINTEGRATOR_CC_DHIS2_UPDATE_SERVERS" env-description:"The AIRQO CC DHIS2 instances to receive copy of OU updates"`
 		AIRQOCCDHIS2OuGroupAddServers  string `mapstructure:"airqo_cc_dhis2_ougroup_add_servers"  env:"AIRQOINTEGRATOR_CC_DHIS2_OUGROUP_ADD_SERVERS" env-description:"The AIRQO CC DHIS2 instances APIs used to add ous to groups"`
 		AIRQOMetadataBatchSize         int    `mapstructure:"airqo_metadata_batch_size"  env:"AIRQOINTEGRATOR_METADATA_BATCH_SIZE" env-description:"The AIRQO Metadata items to chunk in a metadata request" env-default:"50"`
-		AIRQOSyncCronExpression        string `mapstructure:"airqo_sync_cron_expression"  env:"AIRQOINTEGRATOR_SYNC_CRON_EXPRESSION" env-description:"The AIRQO Health Facility Syncronisation Cron Expression" env-default:"0 0-23/6 * * *"`
+		AIRQOSyncCronExpression        string `mapstructure:"airqo_sync_cron_expression"  env:"AIRQOINTEGRATOR_SYNC_CRON_EXPRESSION" env-description:"The AIRQO Measurements Syncronisation Cron Expression" env-default:"0 0-23/6 * * *"`
 		AIRQORetryCronExpression       string `mapstructure:"airqo_retry_cron_expression"  env:"AIRQOINTEGRATOR_RETRY_CRON_EXPRESSION" env-description:"The AIRQO request retry Cron Expression" env-default:"*/5 * * * *"`
 		AuthToken                      string `mapstructure:"authtoken" env:"RAPIDPRO_AUTH_TOKEN" env-description:"API JWT authorization token"`
 	} `yaml:"api"`

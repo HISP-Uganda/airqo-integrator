@@ -6,8 +6,8 @@ import (
 	"airqo-integrator/models"
 	"fmt"
 	"github.com/gin-gonic/gin"
-	"github.com/go-co-op/gocron"
 	"github.com/jmoiron/sqlx"
+	"github.com/robfig/cron/v3"
 	"github.com/samply/golang-fhir-models/fhir-models/fhir"
 	log "github.com/sirupsen/logrus"
 	"os"
@@ -35,6 +35,10 @@ var splash = `
 ╹ ╹╹╹┗╸┗┻┛┗━┛    ╹ ┗━┛   ╺┻┛╹ ╹╹┗━┛┗━╸
 `
 
+func testing(msg string) {
+	log.Infof("Hi %s, You're testing schedules task at %v", msg, time.Now().Format("15:04:05"))
+}
+
 func main() {
 	fmt.Printf(splash)
 	dbConn, err := sqlx.Connect("postgres", config.AirQoIntegratorConf.Database.URI)
@@ -47,35 +51,7 @@ func main() {
 	// os.Exit(1)
 
 	go func() {
-		// Create a new scheduler
-		s := gocron.NewScheduler(time.UTC)
-		// Schedule the task to run "30 minutes after midn, 4am, 8am, 12pm..., everyday"
-		// if --skip-ousync flag is on we ignore
-		if !*config.SkipOUSync {
-			log.WithFields(log.Fields{"SyncCronExpression": config.AirQoIntegratorConf.API.AIRQOSyncCronExpression}).Info(
-				"Facility Synchronisation Cron Expression")
-			_, err := s.Cron(config.AirQoIntegratorConf.API.AIRQOSyncCronExpression).Do(
-				SendAirQoClimateData2, time.Now().Add(-24*time.Hour), time.Now())
-			if err != nil {
-				log.WithError(err).Error("Error scheduling measurements sync task:")
-				return
-			}
-		}
-
-		// retrying incomplete requests runs every 5 minutes
-		log.WithFields(log.Fields{"RetryCronExpression": config.AirQoIntegratorConf.API.AIRQORetryCronExpression}).Info(
-			"Request Retry Cron Expression")
-		if !*config.SkipRequestProcessing {
-			_, err = s.Cron(config.AirQoIntegratorConf.API.AIRQORetryCronExpression).Do(RetryIncompleteRequests)
-			if err != nil {
-				log.WithError(err).Error("Error scheduling incomplete request retry task:")
-			}
-		}
-		s.StartAsync()
-	}()
-
-	go func() {
-		if !*config.SkipOUSync {
+		if !*config.SkipSync {
 			LoadOuLevels()
 			LoadOuGroups()
 			LoadAttributes()
@@ -99,6 +75,31 @@ func main() {
 			}
 			SendAirQoClimateData2(startDate, endDate)
 		}
+	}()
+
+	go func() {
+		// Create a new scheduler
+		c := cron.New()
+
+		if !*config.SkipSync {
+			_, err := c.AddFunc(config.AirQoIntegratorConf.API.AIRQOSyncCronExpression, func() {
+				SendAirQoClimateData2(time.Now().Add(-24*time.Hour), time.Now())
+			})
+			if err != nil {
+				log.WithError(err).Error("Error scheduling measurements sync task:")
+				return
+			}
+		}
+		if !*config.SkipRequestProcessing {
+			_, err := c.AddFunc(config.AirQoIntegratorConf.API.AIRQORetryCronExpression, func() {
+				RetryIncompleteRequests()
+			})
+			if err != nil {
+				log.WithError(err).Error("Error scheduling incomplete request retry task:")
+			}
+		}
+
+		c.Start()
 	}()
 
 	jobs := make(chan int)
