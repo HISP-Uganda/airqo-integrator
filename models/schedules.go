@@ -168,7 +168,7 @@ func UpdateScheduleTx(tx *sqlx.Tx, schedule Schedule) error {
 // SetNextRun set the next time the schedule will run
 func (s *Schedule) SetNextRun(tx *sqlx.Tx, nextRun time.Time) error {
 	s.NextRunAt = nextRun
-	_, err := tx.NamedExec(`UPDATE schedules SET next_run_at = :last_run_at WHERE id = :id`, s)
+	_, err := tx.NamedExec(`UPDATE schedules SET next_run_at = :next_run_at WHERE id = :id`, s)
 	return err
 }
 
@@ -299,8 +299,8 @@ func CheckDhis2AsyncJobTaskSummary(tx *sqlx.Tx, schedule Schedule) (*AsyncJobImp
 	return taskSummary, nil
 }
 
-// CheckDhis2AysncJobStatus checks the status of an async job
-func CheckDhis2AysncJobStatus(schedule Schedule) (bool, error) {
+// CheckDhis2AsyncJobStatus checks the status of an async job
+func CheckDhis2AsyncJobStatus(schedule Schedule) (bool, bool, error) {
 	if *schedule.ServerID > 0 {
 		server := GetServerByID(int64(*schedule.ServerID))
 		srv := clients.Server{
@@ -316,7 +316,7 @@ func CheckDhis2AysncJobStatus(schedule Schedule) (bool, error) {
 				"server_id": *schedule.ServerID,
 				"error":     err,
 			}).Error("Could not get client for server!")
-			return false, err
+			return false, false, err
 		}
 		resource := fmt.Sprintf(
 			"system/tasks/%s/%s",
@@ -332,20 +332,20 @@ func CheckDhis2AysncJobStatus(schedule Schedule) (bool, error) {
 				"job_id":      schedule.AsyncJobID,
 				"error":       err,
 			}).Error("Could not get task status for async job!")
-			return false, err
+			return false, false, err
 		}
 		var taskStatus []AsyncJobStatus
 		err = json.Unmarshal(resp.Body(), &taskStatus)
 		if err != nil {
 			log.WithError(err).Error("Failed to unmarshall response taskStatus!")
-			return false, err
+			return false, false, err
 		}
 		// use lo to find if any AsyncJobStatus in taskStatus slice has completed == true and return true, nil
 		return len(lo.Filter(taskStatus, func(item AsyncJobStatus, _ int) bool {
 			return item.Completed
-		})) > 0, nil
+		})) > 0, len(taskStatus) > 0, nil
 
 	}
 
-	return false, nil
+	return false, false, nil
 }

@@ -309,7 +309,8 @@ CREATE TABLE schedules
     first_run_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,                                     -- when to push first.
     last_run_at     TIMESTAMPTZ,                                                                        -- when last ran
     next_run_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    status          text        NOT NULL DEFAULT 'ready' CHECK (status IN ('ready', 'skipped', 'sent', 'failed', 'error', 'completed')),
+    status          text        NOT NULL DEFAULT 'ready' CHECK (
+        status IN ('ready', 'skipped', 'expired', 'canceled','sent', 'failed', 'error', 'completed')),
     is_active       BOOLEAN     NOT NULL DEFAULT 't',
     async_job_type TEXT DEFAULT '',
     async_jobid     TEXT                 DEFAULT '',                                                    -- if it is an async job

@@ -128,7 +128,7 @@ func ProcessSchedule(db *sqlx.DB, id int64) {
 
 	switch schedule.ScheduleType {
 	case "dhis2_async_job_check":
-		completed, _ := models.CheckDhis2AysncJobStatus(schedule)
+		completed, exists, _ := models.CheckDhis2AsyncJobStatus(schedule)
 		if completed {
 			taskSummary, err := models.CheckDhis2AsyncJobTaskSummary(tx, schedule)
 			if err != nil {
@@ -190,10 +190,15 @@ func ProcessSchedule(db *sqlx.DB, id int64) {
 			}
 
 		} else {
-			schedule.Status = "ready"
-			nextRun := time.Now().Add(
-				time.Second * time.Duration(config.AirQoIntegratorConf.Server.Dhis2JobStatusCheckInterval))
-			_ = schedule.SetNextRun(tx, nextRun)
+			if exists { // perhaps async request removed from server
+				schedule.Status = "ready"
+				nextRun := time.Now().Add(
+					time.Second * time.Duration(config.AirQoIntegratorConf.Server.Dhis2JobStatusCheckInterval))
+				_ = schedule.SetNextRun(tx, nextRun)
+			} else {
+				schedule.Status = "expired"
+			}
+
 			schedule.Updated = time.Now().In(models.Location)
 			err = models.UpdateScheduleTx(tx, schedule)
 			if err != nil {

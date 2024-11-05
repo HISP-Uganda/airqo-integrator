@@ -17,17 +17,20 @@ server:
   migrations_dir: "file:///usr/share/airqo-integrator/db/migrations"
 
 api:
-  airqo_base_url: ""
+  airqo_base_url: "https://api.airqo.net/api/v2/"
   airqo_token: ""
+  airqo_pilot_districts: "Kampala District"
   airqo_dhis2_base_url: ""
   airqo_dhis2_user: "admin"
   airqo_dhis2_password: "district"
   airqo_dhis2_pat: ""
-  airqo_cc_dhis2_hierarchy_servers: "test240_OU,test237_OU"
-  airqo_cc_dhis2_servers: "test237_OU,test240_OU"
-  airqo_cc_dhis2_create_servers: "test240_OU,test237_OU"
-  airqo_cc_dhis2_update_servers: "test240_OU_Update,test237_OU_Update"
-  airqo_cc_dhis2_ougroup_add_servers: "test240_OU_GroupAdd,test237_OU_GroupAdd"
+  airqo_dhis2_dataset: "hKBjahBED0H"
+  airqo_dhis2_attribute_option_combo: "HllvX50cXC0"
+  airqo_cc_dhis2_hierarchy_servers: ""
+  airqo_cc_dhis2_servers: ""
+  airqo_cc_dhis2_create_servers: ""
+  airqo_cc_dhis2_update_servers: ""
+  airqo_cc_dhis2_ougroup_add_servers: ""
   airqo_dhis2_tree_ids: "akV6429SUqu"
   airqo_metadata_batch_size: 50
   airqo_dhis2_facility_level: 5

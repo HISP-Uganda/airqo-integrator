@@ -26,8 +26,8 @@ CREATE TABLE IF NOT EXISTS sites (
     region TEXT NOT NULL DEFAULT '',
     longitude DOUBLE PRECISION NOT NULL,
     latitude  DOUBLE PRECISION NOT NULL,
-    dhis2_district BIGSERIAL,
-    current_subcounty BIGSERIAL,
+    dhis2_district BIGINT NOT NULL DEFAULT 0,
+    current_subcounty BIGINT NOT NULL DEFAULT 0,
     created TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (uid)

@@ -1,0 +1,31 @@
+{
+  "name": "dhis2",
+  "username":"admin",
+  "password":"district",
+  "URL":"https://play.dhis2.org/api/dataValueSets",
+  "IsProxyServer":false,
+  "systemType":"DHIS2",
+  "endPointType":"DataValueSets",
+  "authMethod":"Basic",
+  "authToken":"d2pat_sNQJTrUvZfDPCD8OTbYdcjW8vHQSzOok3233396680",
+  "HTTPMethod":"POST",
+  "callbackURL":"",
+  "allowCallbacks":false,
+  "allowCopies":false,
+  "useSSL": true,
+  "CCURLS": [],
+  "useAsync": true,
+  "parseResponses": true,
+  "startSubmissionPeriod":0,
+  "endSubmissionPeriod":23,
+  "URLParams": {
+    "importStrategy":
+    "CREATE_AND_UPDATE",
+    "async": true},
+  "suspended":false,
+  "IPAddress": "localhost",
+  "JSONResponseXPATH": "",
+  "XMLResponseXPATH": "",
+  "allowedSources":["localhost"]
+
+}
